@@ -14,27 +14,15 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QMutex>
+#include <QtMqtt/QMqttClient>
 #include "ui_Shelly.h"
 #include "qjsonmodel.h"
 #include "../interface.h"
 
 
-struct ShellyDevice
-{
-    QString RomID;
-    QString pathLocation;
-    QString value = "0";
-    QTableWidgetItem RomID_item;
-    QTableWidgetItem path_item;
-    QTableWidgetItem value_item;
-    QTableWidgetItem maxValue_item;
-    QTableWidgetItem command_item;
-    QTableWidgetItem readback_item;
-};
 
+enum readHttpInterval { readHttp1mn, readHttp2mn, readHttp5mn, readHttp10mn, readHttp30mn, readHttp1hour };
 
-
-enum readInterval { read1mn, read2mn, read5mn, read10mn, read30mn, read1hour };
 
 
 class comboInterval : public QComboBox
@@ -52,19 +40,18 @@ public:
 };
 
 
-
 class shellyMainDevice : public QWidget
 {
     Q_OBJECT
 public:
-    QList<ShellyDevice*> ShellyDevices;
-    ShellyDevice* deviceCommand = nullptr;
+    QList<shellyHttpDevice*> httpShellyDevices;
+    shellyHttpDevice* deviceCommand = nullptr;
     QTableWidgetItem *address;
+    QTableWidgetItem *name;
     QTableWidgetItem *model;
     comboInterval *readInterval;
     QTableWidgetItem *lastRead;
     QString httpReq;
-    //QNetworkReply* reply, *replyCommand;
     QNetworkAccessManager qnamHttp, qnamGet, qnapCommand;
     QJsonModel *jsonmodel;
     QTreeView treeView;
@@ -75,20 +62,21 @@ public:
     bool got_model = false;
     QString log, url_str;
 signals:
-    void newDevice(const ShellyDevice*);
-    void newDeviceValue(const ShellyDevice*);
-    void showDevice(const ShellyDevice*);
+    void newDevice(const shellyHttpDevice*);
+    void newDeviceValue(const shellyHttpDevice*);
+    void showDevice(const shellyHttpDevice*);
     void logCommand(const QString&);
     void logMe(const QString&);
 public slots:
     void displayDevice(int row, int)
     {
-        emit(showDevice(ShellyDevices.at(row)));
+        emit(showDevice(httpShellyDevices.at(row)));
     }
 
 public:
     shellyMainDevice() {
         address = new QTableWidgetItem("192.168.1.xxx");
+        name = new QTableWidgetItem("");
         model = new QTableWidgetItem("...");
         model->setFlags(model->flags() ^ Qt::ItemIsEditable);
         readInterval = new comboInterval;
@@ -146,10 +134,13 @@ public:
     // http://192.168.1.71/rpc/Switch.Set?id=0&on=false
     // http://192.168.1.71/rpc/Switch.Toggle?id=0
     // https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Shelly
+    // MQTT
+    //https://shelly-api-docs.shelly.cloud/gen1/#shelly-trv
+    // topic shellies/shellytrv-8CF681E1363A/thermostat/0/command
+    // payload target_t=21
+    // shellyplusht-08b61fcb738c
 
-
-
-    void setCommand(ShellyDevice *dev, QString command) {
+void setCommand(shellyHttpDevice *dev, QString command) {
         QString command_str = command;
         bool ok;
         if (model->text().startsWith("SHTRV")) {
@@ -179,7 +170,7 @@ public:
         //connect(&qnam, SIGNAL(finished(QNetworkReply*)), this, SLOT(httpCommandFinished(QNetworkReply*)));
     }
 
-    QString ip2Hex(const QString &ip)
+    static QString ip2Hex(const QString &ip)
     {
         bool ok;
         int p1 = ip.indexOf(".");		// get first point position
@@ -216,13 +207,13 @@ public:
         return RomID;
     }
 
-    ShellyDevice *addShellyDevice(QString parameterPath)
+    shellyHttpDevice *addHttpShellyDevice(QString parameterPath)
     {
-        ShellyDevice *newDev = new ShellyDevice;
+        shellyHttpDevice *newDev = new shellyHttpDevice;
         if (newDev) {
-            int index = ShellyDevices.count();
-            ShellyDevices.append(newDev);
-            newDev->RomID = buildRomID(ShellyDevices.count());
+            int index = httpShellyDevices.count();
+            httpShellyDevices.append(newDev);
+            newDev->RomID = buildRomID(httpShellyDevices.count());
             newDev->pathLocation = parameterPath;
             newDev->value = getValue(parameterPath);
             deviceView.insertRow(index);
@@ -231,7 +222,7 @@ public:
             newDev->RomID_item.setFlags(newDev->RomID_item.flags() ^ Qt::ItemIsEditable);
             deviceView.setItem(index, 1, &newDev->path_item);
             newDev->path_item.setText(newDev->pathLocation);
-            newDev->path_item.setFlags(newDev->path_item.flags() ^ Qt::ItemIsEditable);
+            newDev->path_item.setFlags(newDev->path_item.flags() & (~Qt::ItemIsEditable) | (Qt::ItemIsSelectable));
             deviceView.setItem(index, 2, &newDev->value_item);
             newDev->value_item.setText(newDev->value);
             newDev->value_item.setFlags(newDev->value_item.flags() ^ Qt::ItemIsEditable);
@@ -344,16 +335,16 @@ private slots:
                     if (md.startsWith("SHTRV-01"))
                     {
                         log.append("Device is SHTRV-01\n");
-                        if (ShellyDevices.isEmpty()) {
-                            if (QMessageBox::question(this, "Temperature device", "Do you want to create Temperature device ?", QMessageBox::Yes|QMessageBox::No) == QMessageBox::Yes) addShellyDevice("thermostats/0/tmp/value");
-                            ShellyDevice *dev = nullptr;
-                            if (QMessageBox::question(this, "Temperature de consigne", "Do you want to create Temperature de Consigne ?", QMessageBox::Yes|QMessageBox::No) == QMessageBox::Yes) dev = addShellyDevice("thermostats/0/target_t/value");
+                        if (httpShellyDevices.isEmpty()) {
+                            if (QMessageBox::question(this, "Temperature device", "Do you want to create Temperature device ?", QMessageBox::Yes|QMessageBox::No) == QMessageBox::Yes) addHttpShellyDevice("thermostats/0/tmp/value");
+                            shellyHttpDevice *dev = nullptr;
+                            if (QMessageBox::question(this, "Temperature de consigne", "Do you want to create Temperature de Consigne ?", QMessageBox::Yes|QMessageBox::No) == QMessageBox::Yes) dev = addHttpShellyDevice("thermostats/0/target_t/value");
                             if (dev) { dev->command_item.setText("/thermostat/0/?target_t=");
                                 dev->readback_item.setText("target_t/value");
                             }
                         } } } }
             lastRead->setText(QDateTime::currentDateTime().toString("hh:mm:ss"));
-            foreach (ShellyDevice *dev, ShellyDevices) {
+            foreach (shellyHttpDevice *dev, httpShellyDevices) {
                 dev->value = getValue(dev->pathLocation);
                 dev->value_item.setText(dev->value);
                 log.append("New device value " + dev->pathLocation + " = " + dev->value + "\n");
@@ -429,8 +420,10 @@ public:
     bool isManual(const QString) override;
     double getMaxValue(const QString) override;
     QTimer readTimer;
+    QMqttClient *m_client;
     int lastMinute = -1;
     int idle = 0;
+    bool loadConfig = false;
 signals:
     void newDeviceValue(QString, QString) override;
     void newDevice(LogisDomInterface*, QString) override;
@@ -438,10 +431,10 @@ signals:
     void updateInterfaceName(LogisDomInterface*, QString) override;
     void connectionStatus(QAbstractSocket::SocketState) override;
 private:
-    QTabWidget *interfaces;
     QWidget *ui;
     QString configFileName;
     QList<shellyMainDevice*> shellyMainDevices;
+    QList<shellyMqttDevice*> shellyDevicesMqtt, deviceSetTable;
     QString ipaddress;
     quint16 port = 80;
     Ui::ShellyUI *mui;
@@ -449,26 +442,58 @@ private:
     void log(const QString);
     QString logStr;
     shellyMainDevice *addDevice();
-    void readDevices(QList<shellyMainDevice*>& devList);
-    QString selectedPath();
+    shellyMqttDevice *addMqttShellyDevice(const QString &, QString Name = "");
+    QModelIndex getValue(QString);
+    QJsonTreeItem *getMqttTreeItem(QString);
+    QString buildRomID(int n);
+    void readHttpDevices(QList<shellyMainDevice*>& devList);
+    void readMqttDevices(QList<shellyMqttDevice*>& devList);
+    QString selectedHttpPath();
+    QString selectedMqttPath();
+    QJsonModel *jsonmodel;
+    QTreeView *mqttTree;
 private slots:
     void AddDeviceClick();
-    void AddParameterClick();
+    void AddHttpParameterClick();
+    void AddMqttParameterClick();
     void readAllNow();
-    void displayDevice(int, int);
+    void startMqtt();
+    void displayHttpDevice(int, int);
+    void displayMqttDevice(int, int);
+    void ProvideContexMenu(const QPoint&);
     void on_editName_editingFinished();
     void on_ReadButton_clicked();
     void on_ReadAllButton_clicked();
     void on_RemoveButton_clicked();
-    void newShellyDevice(const ShellyDevice*);
-    void newShellyDeviceValue(const ShellyDevice*);
-    void showDevice(const ShellyDevice*);
-    void logThis(const QString &);
-    void pathSelected();
+    void on_buttonConnect_clicked();
+    void on_buttonPublish_clicked();
+    void on_buttonSubscribe_clicked();
+    void handleMessage(const QMqttMessage &qmsg);
+    void setClientPort(int p);
+    void brokerConnected();
+    void brokerDisconnected();
+    void updateLogStateChange();
+    void newHttpShellyDevice(const shellyHttpDevice*);
+    void newMqttShellyDevice(const shellyMqttDevice*);
+    void newHttpShellyDevice(const shellyHttpDevice*, QString);
+    void newMqttShellyDevice(const shellyMqttDevice*, QString);
+    void newHttpShellyDeviceValue(const shellyHttpDevice*);
+    void newMqttShellyDeviceValue(const shellyMqttDevice*);
+    void showHttpDevice(const shellyHttpDevice*);
+    void showMqttDevice(const shellyMqttDevice*);
+    void httpLogThis(const QString &);
+    void httpLogCommand(const QString &);
+    void mqttLogThis(const QString &);
+    void mqttLogCommand(const QString &);
+    void httpPathSelected();
+    void mqttPathSelected();
     void deviceTableSelection();
-    void logChanged();
-    void clearLog();
+    void httpLogChanged();
+    void mqttLogChanged();
+    void clearHttpLog();
+    void clearMqttLog();
     void setLockedState();
+    void newValue(QString, QString);
 };
 
 

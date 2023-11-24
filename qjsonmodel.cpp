@@ -74,6 +74,7 @@ void QJsonTreeItem::setKey(const QString &key)
 void QJsonTreeItem::setValue(const QVariant &value)
 {
     mValue = value;
+    if (tableValue) { tableValue->setValue(mValue.toString()); }
 }
 
 void QJsonTreeItem::setType(const QJsonValue::Type &type)
@@ -96,8 +97,39 @@ QJsonValue::Type QJsonTreeItem::type() const
     return mType;
 }
 
+
+void QJsonTreeItem::append(const QJsonValue& value, QJsonTreeItem* parent)
+{
+    if (value.isObject()) {
+        //Get all QJsonValue childs
+        const QStringList keys = value.toObject().keys(); // To prevent clazy-range warning
+        for (const QString &key : keys) {
+            QJsonTreeItem *item = nullptr;
+            QJsonValue v = value.toObject().value(key);
+            int nbChilds = parent->childCount();
+            int found = -1;
+            for (int n=0; n<nbChilds; n++) {
+                if (parent->child(n)->key() == key) { found = n; item = parent->child(n); break; }
+            }
+            if (found < 0) {
+                item = new QJsonTreeItem(parent);
+                item->setKey(key);
+                item->setType(v.type());
+                parent->appendChild(item);
+            }
+            if (v.isObject()) append(v, item); else {
+                item->setValue(v.toVariant());
+                item->setType(v.type());
+            }
+        }
+    }
+}
+
+
+
 QJsonTreeItem* QJsonTreeItem::load(const QJsonValue& value, QJsonTreeItem* parent)
 {
+    // DO NOT CHANGE
     QJsonTreeItem *rootItem = new QJsonTreeItem(parent);
     rootItem->setKey("root");
 
@@ -267,6 +299,46 @@ bool QJsonModel::load(QByteArray &data)
 {
     return loadJson(data);
 }
+
+
+bool QJsonModel::appendJson(const QString path, const QByteArray &json)
+{
+    if (!mRootItem) mRootItem = new QJsonTreeItem();
+    auto const& jdoc = QJsonDocument::fromJson(json);
+    if (jdoc.isEmpty()) {
+
+    }
+    QStringList path_Items = path.split("/");
+    QJsonTreeItem *nextItem = mRootItem;
+    if (!jdoc.isNull()) {
+        emit layoutAboutToBeChanged();
+        QJsonTreeItem *child = nullptr;
+        for (int nP=0; nP<path_Items.count(); nP++) {
+            int nbChilds = nextItem->childCount();
+            int found = -1;
+            for (int n=0; n<nbChilds; n++) {
+                if (nextItem->child(n)->key() == path_Items.at(nP)) { found = n; child = nextItem->child(n); break; }
+            }
+            if (found < 0) {
+                child = new QJsonTreeItem(nextItem);
+                child->setKey(path_Items.at(nP));
+                nextItem->appendChild(child);
+            }
+            nextItem = child;
+        }
+        if (jdoc.isObject()) {
+            QJsonTreeItem::append(QJsonValue(jdoc.object()), nextItem);
+        } else {
+            QJsonTreeItem::append(QJsonValue(jdoc.object()), nextItem);
+        }
+        emit layoutChanged();
+        return true;
+    }
+    qDebug()<<Q_FUNC_INFO<<"cannot load json";
+    qDebug()<<json;
+    return false;
+}
+
 
 
 bool QJsonModel::loadJson(const QByteArray &json)

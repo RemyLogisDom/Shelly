@@ -25,12 +25,89 @@
 #ifndef QJSONMODEL_H
 #define QJSONMODEL_H
 
+#include <QObject>
+#include <QTableWidgetItem>
 #include <QAbstractItemModel>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QIcon>
+#include <QComboBox>
+
+
+enum readMqttInterval { mqttNoRead, readMqtt1mn, readMqtt2mn, readMqtt5mn, readMqtt10mn, readMqtt30mn, readMqtt1hour };
+
+
+class mqttReadInterval : public QComboBox
+{
+    Q_OBJECT
+public:
+    mqttReadInterval() {
+        addItem("...");
+        addItem("1mn");
+        addItem("2mn");
+        addItem("5mn");
+        addItem("10mn");
+        addItem("30mn");
+        addItem("1 hour");
+    }
+};
+
+
+class tableWidgetMqttItem : public QObject
+{
+    Q_OBJECT
+public:
+    tableWidgetMqttItem() {
+    }
+    QTableWidgetItem tableWidgetItem;
+    QTableWidgetItem lastRead_item;
+    void setValue(QString str) {
+        tableWidgetItem.setText(str);
+        lastRead_item.setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
+        emit(heho(RomID, str));
+    }
+    QString RomID;
+signals:
+    void heho(QString, QString);
+};
+
+
+
+struct shellyHttpDevice
+{
+    QString RomID;
+    QString pathLocation;
+    QString value = "0";
+    QTableWidgetItem RomID_item;
+    QTableWidgetItem name_item;
+    QTableWidgetItem path_item;
+    QTableWidgetItem value_item;
+    QTableWidgetItem lastRead_item;
+    tableWidgetMqttItem valueMqtt;
+    QTableWidgetItem maxValue_item;
+    QTableWidgetItem command_item;
+    QTableWidgetItem readback_item;
+};
+
+
+
+struct shellyMqttDevice
+{
+    QString RomID;
+    QString pathLocation;
+    QString value = "0";
+    QTableWidgetItem RomID_item;
+    QTableWidgetItem name_item;
+    QTableWidgetItem path_item;
+    tableWidgetMqttItem valueMqtt;
+    QTableWidgetItem maxValue_item;
+    QTableWidgetItem command_item;
+    QTableWidgetItem payload_item;
+    mqttReadInterval readInterval;
+};
+
 
 namespace QUtf8Functions
 {
@@ -261,8 +338,6 @@ struct QUtf8BaseTraits
     }
 };
 
-class QJsonModel;
-class QJsonItem;
 
 class QJsonTreeItem
 {
@@ -280,8 +355,10 @@ public:
     QString key() const;
     QVariant value() const;
     QJsonValue::Type type() const;
+    tableWidgetMqttItem *tableValue = nullptr;
 
     static QJsonTreeItem* load(const QJsonValue& value, QJsonTreeItem *parent = nullptr);
+    static void append(const QJsonValue& value, QJsonTreeItem *parent = nullptr);
 
 protected:
 
@@ -308,6 +385,7 @@ public:
     bool load(QIODevice *device);
     bool load(QByteArray &device);
     bool loadJson(const QByteArray& json);
+    bool appendJson(const QString path, const QByteArray& json);
     QVariant data(const QModelIndex &index, int role) const override;
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
@@ -323,6 +401,7 @@ public:
     void arrayContentToJson(QJsonArray jsonArray, QByteArray &json, int indent, bool compact);
     void objectContentToJson(QJsonObject jsonObject, QByteArray &json, int indent, bool compact);
     void valueToJson(QJsonValue jsonValue, QByteArray &json, int indent, bool compact);
+    QList<shellyMqttDevice*> deviceUpdate;
 
 private:
     QJsonValue genJson(QJsonTreeItem *) const;
