@@ -117,12 +117,34 @@ void QJsonTreeItem::append(const QJsonValue& value, QJsonTreeItem* parent)
                 item->setType(v.type());
                 parent->appendChild(item);
             }
-            if (v.isObject()) append(v, item); else {
+            if (v.isObject()) append(v, item);
+            else  if (v.isArray()) append(v, item); else {
                 item->setValue(v.toVariant());
                 item->setType(v.type());
             }
         }
     }
+    else if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &v : array) {
+            append(v, parent);
+        }
+    }
+    else if (value.isString()) {
+        parent->setValue(value.toString());
+    }
+    else if (value.isDouble()) {
+        QString v = QString("%1").arg(value.toDouble());
+        parent->setValue(v);
+    }
+    else if (value.isBool()) {
+        bool v = value.toBool();
+        if (v) parent->setValue("1"); else parent->setValue("0");
+    }
+    //else {
+    //    if (value.isNull()) qDebug() << "isNull";
+    //    if (value.isUndefined()) qDebug() << "isUndefined";
+    //}
 }
 
 
@@ -301,12 +323,11 @@ bool QJsonModel::load(QByteArray &data)
 }
 
 
-bool QJsonModel::appendJson(const QString path, const QByteArray &json)
+void QJsonModel::appendJson(const QString path, const QByteArray &json)
 {
     if (!mRootItem) mRootItem = new QJsonTreeItem();
     auto const& jdoc = QJsonDocument::fromJson(json);
     if (jdoc.isEmpty()) {
-
     }
     QStringList path_Items = path.split("/");
     QJsonTreeItem *nextItem = mRootItem;
@@ -328,16 +349,36 @@ bool QJsonModel::appendJson(const QString path, const QByteArray &json)
         }
         if (jdoc.isObject()) {
             QJsonTreeItem::append(QJsonValue(jdoc.object()), nextItem);
-        } else {
+        }
+        else if (jdoc.isArray()) {
+            QJsonTreeItem::append(QJsonValue(jdoc.array()), nextItem);
+        }
+        else {
             QJsonTreeItem::append(QJsonValue(jdoc.object()), nextItem);
         }
-        emit layoutChanged();
-        return true;
     }
-    qDebug()<<Q_FUNC_INFO<<"cannot load json";
-    qDebug()<<json;
-    return false;
+    else
+    {
+        QJsonTreeItem *child = nullptr;
+        for (int nP=0; nP<path_Items.count(); nP++) {
+            int nbChilds = nextItem->childCount();
+            int found = -1;
+            for (int n=0; n<nbChilds; n++) {
+                if (nextItem->child(n)->key() == path_Items.at(nP)) { found = n; child = nextItem->child(n); break; }
+            }
+            if (found < 0) {
+                child = new QJsonTreeItem(nextItem);
+                child->setKey(path_Items.at(nP));
+                nextItem->appendChild(child);
+            }
+            nextItem = child;
+        }
+        if (child) child->setValue(json);
+    }
+    emit layoutChanged();
 }
+
+
 
 
 
@@ -351,7 +392,6 @@ bool QJsonModel::loadJson(const QByteArray &json)
         if (jdoc.isArray()) {
             mRootItem = QJsonTreeItem::load(QJsonValue(jdoc.array()));
             mRootItem->setType(QJsonValue::Array);
-
         } else {
             mRootItem = QJsonTreeItem::load(QJsonValue(jdoc.object()));
             mRootItem->setType(QJsonValue::Object);
@@ -359,9 +399,7 @@ bool QJsonModel::loadJson(const QByteArray &json)
         endResetModel();
         return true;
     }
-
-    qDebug()<<Q_FUNC_INFO<<"cannot load json";
-    qDebug()<<json;
+    //qDebug()<<Q_FUNC_INFO<<"Cannot load json : " + path + "=" + json;
     return false;
 }
 

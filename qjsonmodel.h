@@ -97,6 +97,8 @@ struct shellyMqttDevice
 {
     QString RomID;
     QString pathLocation;
+    QString devID;
+    QString devCommandStr;
     QString value = "0";
     QTableWidgetItem RomID_item;
     QTableWidgetItem name_item;
@@ -385,7 +387,7 @@ public:
     bool load(QIODevice *device);
     bool load(QByteArray &device);
     bool loadJson(const QByteArray& json);
-    bool appendJson(const QString path, const QByteArray& json);
+    void appendJson(const QString path, const QByteArray& json);
     QVariant data(const QModelIndex &index, int role) const override;
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;

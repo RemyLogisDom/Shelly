@@ -68,7 +68,7 @@ ShellyPlugin::ShellyPlugin(QWidget *parent) : QWidget(parent)
     connect(m_client, &QMqttClient::stateChanged, this, &ShellyPlugin::updateLogStateChange);
     connect(mqttTree, SIGNAL(clicked(const QModelIndex &)), this, SLOT(mqttPathSelected()));
 
-    mui->tableWidgetMqtt->setColumnCount(8);
+    mui->tableWidgetMqtt->setColumnCount(9);
     mui->tableWidgetMqtt->setHorizontalHeaderItem(0, new QTableWidgetItem(tr("RomID")));
     mui->tableWidgetMqtt->setHorizontalHeaderItem(1, new QTableWidgetItem(tr("Name")));
     mui->tableWidgetMqtt->setHorizontalHeaderItem(2, new QTableWidgetItem(tr("Path")));
@@ -77,6 +77,7 @@ ShellyPlugin::ShellyPlugin(QWidget *parent) : QWidget(parent)
     mui->tableWidgetMqtt->setHorizontalHeaderItem(5, new QTableWidgetItem(tr("Command")));
     mui->tableWidgetMqtt->setHorizontalHeaderItem(6, new QTableWidgetItem(tr("Payload")));
     mui->tableWidgetMqtt->setHorizontalHeaderItem(7, new QTableWidgetItem(tr("Read interval")));
+    mui->tableWidgetMqtt->setHorizontalHeaderItem(8, new QTableWidgetItem(tr("Max Value")));
     connect(mui->tableWidgetMqtt, SIGNAL(cellPressed(int, int)),SLOT(displayMqttDevice(int, int)));
     mui->tableWidgetMqtt->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(mui->tableWidgetMqtt, SIGNAL(customContextMenuRequested(const QPoint&)), SLOT(ProvideContexMenu(const QPoint&)));
@@ -95,6 +96,7 @@ ShellyPlugin::ShellyPlugin(QWidget *parent) : QWidget(parent)
     //connect(m_client, &QMqttClient::messageReceived, this, [this](const QByteArray &message, const QMqttTopicName &topic)
     //connect(sub, &QMqttSubscription::messageReceived, this, &QmlMqttSubscription::handleMessage);
 
+    mqttTree->header()->resizeSection(0, 350);
     connect(mui->AddDevice, SIGNAL(clicked()), this, SLOT(AddDeviceClick()));
     connect(mui->pushButtonAddHttpParameter, SIGNAL(clicked()), this, SLOT(AddHttpParameterClick()));
     connect(mui->pushButtonAddMqttParameter, SIGNAL(clicked()), this, SLOT(AddMqttParameterClick()));
@@ -127,8 +129,6 @@ QWidget *ShellyPlugin::getDevWidget(QString)
 void ShellyPlugin::setConfigFileName(const QString fileName)
 {
     configFileName = fileName;
-    configFileName.chop(3);
-    configFileName.append(".cfg");
     mui->labelInterfaceName->setToolTip(configFileName);
 }
 
@@ -168,6 +168,7 @@ void ShellyPlugin::brokerConnected()
     mui->buttonPublish->setEnabled(true);
     mui->buttonConnect->setText(tr("Disconnect"));
     on_buttonSubscribe_clicked();
+    autoConnectionDone = true;
 }
 
 
@@ -181,6 +182,7 @@ void ShellyPlugin::brokerDisconnected()
     mui->buttonPublish->setEnabled(false);
     mui->lineEditUser->setEnabled(true);
     mui->lineEditPassword->setEnabled(true);
+    mui->lineEditSubTopic->setEnabled(true);
 }
 
 
@@ -247,7 +249,11 @@ void ShellyPlugin::handleMessage(const QMqttMessage &qmsg)
                 dev->valueMqtt.lastRead_item.setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
                 deviceSetTable.removeAll(dev);
                 connect(item->tableValue, SIGNAL(heho(QString, QString)), this, SLOT(newValue(QString, QString)));
-                emit(newDeviceValue(dev->RomID, dev->value));
+                bool ok;
+                QString value = dev->value;
+                value.toDouble(&ok);
+                if (!ok) value = translateValue(value);
+                emit(newDeviceValue(dev->RomID, value));
             }
         }
     }
@@ -255,9 +261,12 @@ void ShellyPlugin::handleMessage(const QMqttMessage &qmsg)
 
 
 
-void ShellyPlugin::newValue(QString RomID, QString Value)
+void ShellyPlugin::newValue(QString RomID, QString value)
 {
-    emit(newDeviceValue(RomID, Value));
+    bool ok;
+    value.toDouble(&ok);
+    if (!ok) value = translateValue(value);
+    emit(newDeviceValue(RomID, value));
 }
 
 
@@ -443,8 +452,20 @@ void ShellyPlugin::readConfig()
         shellyDev->readInterval.setCurrentText(devReadInterval);
         devParameter = QString("/mqttDevice_%1").arg(++devIndex, 3, 10, QChar('0'));
         devParamterPathLocation = settings.value(QString(devParameter + "/pathLocation")).toString().replace("*", "/");
-        //qDebug() << devParamterPathLocation;
+        QString RomID = shellyDev->RomID;
+        emit(newDevice(this, RomID));
     }
+    // set interval enable/disable
+    foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
+        if (dev->readInterval.currentIndex() > 0) {
+            foreach (shellyMqttDevice *device, shellyDevicesMqtt) {
+                if ((dev->devID == device->devID) && (dev != device)) {
+                    device->readInterval.setCurrentIndex(0);
+                    device->readInterval.setEnabled(false);
+            }
+        }
+    }
+}
     loadConfig = false;
     emit(updateInterfaceName(this, Name));
 }
@@ -590,9 +611,23 @@ QString ShellyPlugin::getName()
 
 
 
-double ShellyPlugin::getMaxValue(const QString)
+double ShellyPlugin::getMaxValue(const QString RomID)
 {
-    return 1;
+    foreach (shellyMainDevice *devMain, shellyMainDevices)
+    {
+        foreach (shellyHttpDevice *dev, devMain->httpShellyDevices) {
+        if (dev->RomID == RomID) {
+            bool ok;
+            int v = dev->maxValue_item.text().toInt(&ok);
+            if (ok) return v;
+        } } }
+    foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
+        if (dev->RomID == RomID) {
+            bool ok;
+            int v = dev->maxValue_item.text().toInt(&ok);
+            if (ok) return v;
+        } }
+        return 1;
 }
 
 
@@ -602,15 +637,30 @@ bool ShellyPlugin::isManual(const QString)
 }
 
 
-bool ShellyPlugin::isDimmable(const QString)
+bool ShellyPlugin::isDimmable(const QString RomID)
 {
+    foreach (shellyMainDevice *devMain, shellyMainDevices)
+    {
+        foreach (shellyHttpDevice *dev, devMain->httpShellyDevices) {
+            if (dev->RomID == RomID) {
+            bool ok;
+            int v = dev->maxValue_item.text().toInt(&ok);
+            if (ok && (v > 1)) return true;
+            } } }
+    foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
+        if (dev->RomID == RomID) {
+            bool ok;
+            int v = dev->maxValue_item.text().toInt(&ok);
+            if (ok && (v > 1)) return true;
+        } }
     return false;
 }
 
 
-bool ShellyPlugin::acceptCommand(const QString RomID)
+bool ShellyPlugin::acceptCommand(const QString)
 {
-    foreach (shellyMainDevice *devMain, shellyMainDevices)
+    return true;
+/*    foreach (shellyMainDevice *devMain, shellyMainDevices)
     {
         foreach (shellyHttpDevice *dev, devMain->httpShellyDevices) {
         if (dev->RomID == RomID) {
@@ -621,7 +671,7 @@ bool ShellyPlugin::acceptCommand(const QString RomID)
                 if (dev->command_item.text().isEmpty()) return false; else return true; }
         }
     }
-    return false;
+    return false;*/
 }
 
 
@@ -642,11 +692,13 @@ void ShellyPlugin::setStatus(const QString status)
     }
     foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
     if (dev->RomID == RomID) {
-        if (mui->checkBoxMqttLog->isChecked()) mqttLogCommand("Publish topic : " + dev->command_item.text() + " Payload : " + dev->payload_item.text() + command);
-        QByteArray payload = (dev->payload_item.text() + command).toUtf8();
-        if (m_client->publish(dev->command_item.text(), payload) == -1)
+        QString payload = dev->payload_item.text();
+        if (payload.contains("XXX")) payload.replace("XXX", command); else payload.append(command);
+        if (mui->checkBoxMqttLog->isChecked()) mqttLogCommand("Publish topic : " + dev->command_item.text() + " Payload : " + payload);
+        QByteArray P = (payload).toUtf8();
+        if (m_client->publish(dev->command_item.text(), P) == -1)
         {
-                if (mui->checkBoxMqttLog->isChecked()) mqttLogCommand(" Failed\n");
+            if (mui->checkBoxMqttLog->isChecked()) mqttLogCommand(" Failed\n");
         }
         else
         {
@@ -785,10 +837,11 @@ void ShellyPlugin::AddMqttParameterClick()
 
 shellyMqttDevice *ShellyPlugin::addMqttShellyDevice(const QString &parameterPath, QString Name)
 {
-        shellyMqttDevice *newDev = new  shellyMqttDevice;
+        shellyMqttDevice *newDev = new shellyMqttDevice;
         if (newDev) {
             int index = shellyDevicesMqtt.count();
             shellyDevicesMqtt.append(newDev);
+            connect(&newDev->readInterval, &QComboBox::currentTextChanged, [=] { intervalChanged( &newDev->readInterval );  } );
             newDev->RomID = buildRomID(shellyDevicesMqtt.count());
             newDev->pathLocation = parameterPath;
             QJsonTreeItem *item = getMqttTreeItem(parameterPath);
@@ -799,7 +852,11 @@ shellyMqttDevice *ShellyPlugin::addMqttShellyDevice(const QString &parameterPath
                         newDev->valueMqtt.tableWidgetItem.setText(item->value().toString());
                         connect(item->tableValue, SIGNAL(heho(QString, QString)), this, SLOT(newValue(QString, QString)));
                         newDev->valueMqtt.lastRead_item.setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
-                        emit(newDeviceValue(newDev->RomID, newDev->value));
+                        bool ok;
+                        QString value = newDev->value;
+                        value.toDouble(&ok);
+                        if (!ok) value = translateValue(value);
+                        emit(newDeviceValue(newDev->RomID, value));
             }
             else deviceSetTable.append(newDev);
             mui->tableWidgetMqtt->insertRow(index);
@@ -818,10 +875,37 @@ shellyMqttDevice *ShellyPlugin::addMqttShellyDevice(const QString &parameterPath
             mui->tableWidgetMqtt->setItem(index, 5, &newDev->command_item);
             mui->tableWidgetMqtt->setItem(index, 6, &newDev->payload_item);
             mui->tableWidgetMqtt->setCellWidget(index, 7, &newDev->readInterval);
-            newMqttShellyDevice(newDev, Name);
+            mui->tableWidgetMqtt->setItem(index, 8, &newDev->maxValue_item);
+            QStringList L = newDev->path_item.text().split("/");
+            if (L.count() > 1) { if (L.at(0) == "shellies") {
+                newDev->devID = L.at(1);
+                newDev->devCommandStr = L.at(0) + "/" + L.at(1) + "/command"; }
+                else newDev->devID = L.at(0); }
+            bool ok;
+            QString value = newDev->value;
+            value.toDouble(&ok);
+            if (!ok) value = translateValue(value);
+            QString RomID = newDev->RomID;
+            if (!loadConfig) RomID.append("!");
+            if (!Name.isEmpty()) RomID.append( ":" + Name);
+            if (!loadConfig) {
+                        emit(newDevice(this, RomID));
+                        emit(newDeviceValue(newDev->RomID, value));
+                        setLockedState();
+            }
             return newDev;
         }
         return nullptr;
+}
+
+
+QString ShellyPlugin::translateValue(QString value)
+{
+    if (value.contains("true", Qt::CaseInsensitive)) return "1";
+    if (value.contains("on", Qt::CaseInsensitive)) return "1";
+    if (value.contains("false", Qt::CaseInsensitive)) return "0";
+    if (value.contains("off", Qt::CaseInsensitive)) return "0";
+    return "NA";
 }
 
 
@@ -1071,10 +1155,7 @@ void ShellyPlugin::newHttpShellyDevice(const shellyHttpDevice* dev, QString Name
     bool ok;
     QString value = dev->value;
     value.toDouble(&ok);
-    if (!ok) {
-        if (value.contains("false", Qt::CaseInsensitive)) value = "0";
-        else if (value.contains("true", Qt::CaseInsensitive)) value = "1";
-    }
+    if (!ok) value = translateValue(value);
     QString RomID = dev->RomID;
     if (!loadConfig) RomID.append("!");
     if (!Name.isEmpty()) RomID.append( ":" + Name);
@@ -1090,10 +1171,7 @@ void ShellyPlugin::newMqttShellyDevice(const shellyMqttDevice* dev, QString Name
     bool ok;
     QString value = dev->value;
     value.toDouble(&ok);
-    if (!ok) {
-        if (value.contains("false", Qt::CaseInsensitive)) value = "0";
-        else if (value.contains("true", Qt::CaseInsensitive)) value = "1";
-    }
+    if (!ok) value = translateValue(value);
     QString RomID = dev->RomID;
     if (!loadConfig) RomID.append("!");
     if (!Name.isEmpty()) RomID.append( ":" + Name);
@@ -1102,7 +1180,6 @@ void ShellyPlugin::newMqttShellyDevice(const shellyMqttDevice* dev, QString Name
         emit(newDeviceValue(dev->RomID, value));
         setLockedState();
     }
-
 }
 
 
@@ -1111,10 +1188,7 @@ void ShellyPlugin::newHttpShellyDevice(const shellyHttpDevice* dev)
     bool ok;
     QString value = dev->value;
     value.toDouble(&ok);
-    if (!ok) {
-        if (value.contains("false", Qt::CaseInsensitive)) value = "0";
-        else if (value.contains("true", Qt::CaseInsensitive)) value = "1";
-    }
+    if (!ok) value = translateValue(value);
     QString RomID = dev->RomID;
     if (!loadConfig) RomID.append("!");
     emit(newDevice(this, RomID));
@@ -1130,10 +1204,7 @@ void ShellyPlugin::newMqttShellyDevice(const shellyMqttDevice* dev)
     bool ok;
     QString value = dev->value;
     value.toDouble(&ok);
-    if (!ok) {
-        if (value.contains("false", Qt::CaseInsensitive)) value = "0";
-        else if (value.contains("true", Qt::CaseInsensitive)) value = "1";
-    }
+    if (!ok) value = translateValue(value);
     QString RomID = dev->RomID;
     if (!loadConfig) RomID.append("!");
     emit(newDevice(this, RomID));
@@ -1147,10 +1218,7 @@ void ShellyPlugin::newHttpShellyDeviceValue(const shellyHttpDevice* dev)
     bool ok;
     QString value = dev->value;
     value.toDouble(&ok);
-    if (!ok) {
-        if (value.contains("false", Qt::CaseInsensitive)) value = "0";
-        else if (value.contains("true", Qt::CaseInsensitive)) value = "1";
-    }
+    if (!ok) value = translateValue(value);
     emit(newDeviceValue(dev->RomID, value));
 }
 
@@ -1162,10 +1230,7 @@ void ShellyPlugin::newMqttShellyDeviceValue(const shellyMqttDevice* dev)
     bool ok;
     QString value = dev->value;
     value.toDouble(&ok);
-    if (!ok) {
-        if (value.contains("false", Qt::CaseInsensitive)) value = "0";
-        else if (value.contains("true", Qt::CaseInsensitive)) value = "1";
-    }
+    if (!ok) value = translateValue(value);
     emit(newDeviceValue(dev->RomID, value));
 }
 
@@ -1179,6 +1244,36 @@ void ShellyPlugin::showHttpDevice(const shellyHttpDevice* dev)
 void ShellyPlugin::showMqttDevice(const shellyMqttDevice* dev)
 {
     emit(deviceSelected(dev->RomID));
+}
+
+
+void ShellyPlugin::intervalChanged(const mqttReadInterval *interval)
+{
+    shellyMqttDevice *device = nullptr;
+    if (interval) {
+        foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
+        if (&dev->readInterval == interval) { device = dev; break; }
+        }
+        if (!device) return;
+        QStringList paths = device->pathLocation.split("/");
+        QString strCommand;
+        if (paths.count() > 2) strCommand = paths.at(0) + "/" + paths.at(1) + "/command";
+        if (paths.at(0) == "shellies") { device->devCommandStr = strCommand;
+        device->command_item.setText(strCommand); }
+        if (device->readInterval.currentIndex() == 0) {
+        foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
+                if ((dev->devID == device->devID) && (dev != device)) {
+                    dev->readInterval.setEnabled(true);
+                } }
+        }
+        else {
+        foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
+                if ((dev->devID == device->devID) && (dev != device)) {
+                    dev->readInterval.setCurrentIndex(0);
+                    dev->readInterval.setEnabled(false);
+                } }
+        }
+    }
 }
 
 
@@ -1264,9 +1359,9 @@ void ShellyPlugin::readHttpDevices(QList<shellyMainDevice*>& devList)
 void ShellyPlugin::readMqttDevices(QList<shellyMqttDevice*>& devList)
 {
     foreach (shellyMqttDevice *dev, devList) {
-        //qDebug() << "Read " + dev->RomID;
-        QString topic = dev->command_item.text();
-        QString payload = dev->payload_item.text();
+        //qDebug() << "Read " + dev->pathLocation;
+        QString topic = dev->devCommandStr;
+        QString payload = "announce";
         if (mui->checkBoxMqttLog->isChecked()) mqttLogCommand("Publish topic : " + topic + " Payload : " + payload);
         if (m_client->publish(topic, payload.toUtf8()) == -1)
         {
@@ -1297,14 +1392,17 @@ void ShellyPlugin::readAllNow()
     QList<shellyMqttDevice*> mqttDevList;
     if (lastMinute < 0) {
         readHttpDevices(shellyMainDevices);
-        lastMinute = QDateTime::currentDateTime().time().minute();
         foreach (shellyMqttDevice *dev, shellyDevicesMqtt) {
             if (dev->readInterval.currentIndex() > 0) mqttDevList.append(dev);
         }
+        readMqttDevices(mqttDevList);
+        lastMinute = QDateTime::currentDateTime().time().minute();
     }
     int m = QDateTime::currentDateTime().time().minute();
     if (m != lastMinute)
     {
+        if (m_client->state() != QMqttClient::Connected) { autoConnectionDone = false; }
+        if (!autoConnectionDone) on_buttonConnect_clicked();
         foreach (shellyMainDevice *dev, shellyMainDevices) {
             switch (dev->readInterval->currentIndex())
             {
@@ -1370,16 +1468,32 @@ void ShellyPlugin::ProvideContexMenu(const QPoint&p)
     QAction copyAction(tr("Copy"));
     QAction lockAction(tr("Lock"));
     QAction unlockAction(tr("Unlock"));
-    QList<QTableWidgetItem *> items=mui->tableWidgetMqtt->selectedItems();
-    if (items.count()==1) {
-        submenu.addAction(&copyAction);
+    QAction pasteAction("");
+    QAction pasteCommandAction("");
+    QString strPaste, strPasteCommand;
+    QList<QTableWidgetItem *> items = mui->tableWidgetMqtt->selectedItems();
+    if (items.count() == 1) {
+        if (items[0]->column() == 1) { submenu.addAction(&copyAction); }
         if (items[0]->column() == 2) {
+            submenu.addAction(&copyAction);
             if (items[0]->flags() & Qt::ItemIsEditable) submenu.addAction(&lockAction); else submenu.addAction(&unlockAction); }
+        if (items[0]->column() == 5) {
+            int r = items[0]->row();
+            QString path = mui->tableWidgetMqtt->item(r, 2)->text();
+            QStringList paths = path.split("/");
+            if (paths.count() > 2) strPaste = paths.at(0) + "/" + paths.at(1);
+            if (paths.count() > 2) strPasteCommand = paths.at(0) + "/" + paths.at(1) + "/command";
+            if (paths.at(0) == "shellies") { pasteAction.setText(strPaste);
+            pasteCommandAction.setText(strPasteCommand);
+            submenu.addAction(&pasteAction);
+            submenu.addAction(&pasteCommandAction); } }
         QAction* rightClickItem = submenu.exec(c);
         if (rightClickItem == &copyAction) {
             qApp->clipboard()->setText(items[0]->text()); }
         if (rightClickItem == &lockAction) items[0]->setFlags(items[0]->flags() ^ Qt::ItemIsEditable);
         if (rightClickItem == &unlockAction) items[0]->setFlags(items[0]->flags() | Qt::ItemIsEditable);
+        if (rightClickItem == &pasteAction) items[0]->setText(strPaste);
+        if (rightClickItem == &pasteCommandAction) items[0]->setText(strPasteCommand);
         }
 }
 

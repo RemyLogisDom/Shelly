@@ -1,8 +1,8 @@
 TEMPLATE        = lib
 CONFIG         += plugin
-QT             += widgets network
-HEADERS         = ShellyPlugin.h qjsonmodel.h
-SOURCES         = ShellyPlugin.cpp qjsonmodel.cpp
+QT             += widgets network mqtt
+HEADERS         = ShellyPlugin.h qjsonmodel.h simplecrypt.h
+SOURCES         = ShellyPlugin.cpp qjsonmodel.cpp simplecrypt.cpp
 TARGET          = ShellyPlugin
 FORMS += Shelly.ui
 

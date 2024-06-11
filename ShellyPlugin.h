@@ -56,7 +56,6 @@ public:
     QJsonModel *jsonmodel;
     QTreeView treeView;
     QTableWidget deviceView;
-    QMutex mutex;
     /// used to request Shelly model when application starts.
     /// Once model has been identified got_model = true
     bool got_model = false;
@@ -72,7 +71,6 @@ public slots:
     {
         emit(showDevice(httpShellyDevices.at(row)));
     }
-
 public:
     shellyMainDevice() {
         address = new QTableWidgetItem("192.168.1.xxx");
@@ -135,10 +133,15 @@ public:
     // http://192.168.1.71/rpc/Switch.Toggle?id=0
     // https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Shelly
     // MQTT
-    //https://shelly-api-docs.shelly.cloud/gen1/#shelly-trv
+    // https://shelly-api-docs.shelly.cloud/gen1/#shelly-trv
     // topic shellies/shellytrv-8CF681E1363A/thermostat/0/command
     // payload target_t=21
     // shellyplusht-08b61fcb738c
+    // commandes ok
+    // shellies/command payload : announce   get update for all devices
+    // shellies/command  payload : settings
+    // shellies/shellytrv-8CF681E1363A/command payload : announce  get update for one device
+
 
 void setCommand(shellyHttpDevice *dev, QString command) {
         QString command_str = command;
@@ -222,7 +225,7 @@ void setCommand(shellyHttpDevice *dev, QString command) {
             newDev->RomID_item.setFlags(newDev->RomID_item.flags() ^ Qt::ItemIsEditable);
             deviceView.setItem(index, 1, &newDev->path_item);
             newDev->path_item.setText(newDev->pathLocation);
-            newDev->path_item.setFlags(newDev->path_item.flags() & (~Qt::ItemIsEditable) | (Qt::ItemIsSelectable));
+            newDev->path_item.setFlags(newDev->path_item.flags() & ((~Qt::ItemIsEditable) | (Qt::ItemIsSelectable)));
             deviceView.setItem(index, 2, &newDev->value_item);
             newDev->value_item.setText(newDev->value);
             newDev->value_item.setFlags(newDev->value_item.flags() ^ Qt::ItemIsEditable);
@@ -424,6 +427,7 @@ public:
     int lastMinute = -1;
     int idle = 0;
     bool loadConfig = false;
+    QString translateValue(QString);
 signals:
     void newDeviceValue(QString, QString) override;
     void newDevice(LogisDomInterface*, QString) override;
@@ -452,6 +456,7 @@ private:
     QString selectedMqttPath();
     QJsonModel *jsonmodel;
     QTreeView *mqttTree;
+    bool autoConnectionDone = false;
 private slots:
     void AddDeviceClick();
     void AddHttpParameterClick();
@@ -481,6 +486,7 @@ private slots:
     void newMqttShellyDeviceValue(const shellyMqttDevice*);
     void showHttpDevice(const shellyHttpDevice*);
     void showMqttDevice(const shellyMqttDevice*);
+    void intervalChanged(const mqttReadInterval*);
     void httpLogThis(const QString &);
     void httpLogCommand(const QString &);
     void mqttLogThis(const QString &);
